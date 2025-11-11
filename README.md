@@ -91,7 +91,7 @@
 | ------------ | ------------ | --------------------------------------------------- |
 | MQ-5 – VCC   | 5V           | Heater consome ~160 mA (@5 V)                       |
 | MQ-5 – GND   | GND          | Referência comum                                    |
-| MQ-5 – AOUT  | GPIO34       | Passa por **divisor de tensão** (5 V → ~3,3 V máx.) |
+| MQ-5 – AOUT  | GPIO34       |                                                     |
 | DHT11 – DATA | GPIO4        | DHT11 alimentado em 3,3 V                           |
 | DHT11 – VCC  | 3V3          |                                                     |
 | DHT11 – GND  | GND          |                                                     |
