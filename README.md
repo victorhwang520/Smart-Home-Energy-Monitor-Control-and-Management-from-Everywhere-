@@ -41,7 +41,7 @@
 
 * **Microcontrolador:**
 
-  * ESP32 WROVER (dev kit Freenove, 3,3 V em GPIO, ADC 12 bits).
+  * ESP32 WROVER (dev kit Freenove, 5 V em GPIO, ADC 12 bits).
 * **Sensor de gás:**
 
   * **MQ-5** em módulo (heater + RL + comparador), alimentado em **5 V**.
