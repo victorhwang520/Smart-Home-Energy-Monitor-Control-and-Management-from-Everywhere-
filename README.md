@@ -152,6 +152,27 @@ float adcToPPM(int adc) {
 
 > De novo: isso é um **modelo linear simplificado**, não a curva logarítmica oficial do datasheet. Foi escolhido para facilitar visualização e explicação em sala, mantendo monotonicidade (mais gás → ADC maior → ppm maior).
 
+### 4.3 Cuidados com ventilação e jatos de gás (Princípio de Bernoulli)
+
+Os melhores resultados são obtidos quando o sensor está em um ambiente com ar relativamente **estacionário**, sem jatos fortes de gás ou vento direto (ventilador, exaustor, janela aberta com corrente forte).
+
+Quando se joga um jato de gás diretamente sobre o sensor, ou se há um fluxo de ar muito rápido ao redor, entram em jogo efeitos de **dinâmica dos fluidos**, incluindo o Princípio de Bernoulli:
+
+- regiões com **gás em alta velocidade** podem gerar **zonas de baixa pressão** e puxar ar atmosférico junto;
+- o jato cria uma **mistura turbulenta** (gás + ar “limpo”) que varia muito no tempo;
+- o fluxo pode inclusive **afastar** o gás da região do sensor depois do pico inicial.
+
+Na prática, isso causa comportamentos como:
+- pico rápido de leitura quando o jato atinge o sensor;
+- queda parcial enquanto o jato continua (“ar fresco” sendo arrastado);
+- aumento novamente quando o jato é desligado e o gás fica mais “estacionário” no ambiente.
+
+Por isso, recomenda-se:
+- **não instalar o sensor em locais com vento forte constante** (exaustores, dutos de ventilação, correntes de ar intensas);
+- **evitar testar apontando jatos muito fortes diretamente no sensor**;
+- preferir testes em que o gás se mistura no ar de forma mais estável (ex.: pequeno volume de gás liberado em um recipiente ou ambiente controlado).
+
+
 ---
 
 ## 5) Comunicação MQTT
