@@ -24,7 +24,7 @@
   * **temperatura e umidade** (DHT11).
 * Publicar leituras via **Wi-Fi + MQTT** (Mosquitto).
 * Permitir monitoramento em **frontend web** (HTML + JavaScript + MQTT/WebSocket).
-* Possibilidade futura de **alarmar** (LEDs / buzzer / notificação web).
+* Possibilidade futura de **alarmar** (LEDs / buzzer).
 
 ### 1.2 Requisitos não funcionais
 
