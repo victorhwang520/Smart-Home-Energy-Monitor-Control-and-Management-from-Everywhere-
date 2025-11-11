@@ -96,14 +96,6 @@
 | DHT11 – VCC  | 3V3          |                                                     |
 | DHT11 – GND  | GND          |                                                     |
 
-**Divisor de tensão para AOUT (MQ-5 → GPIO34):**
-
-Exemplo usado no projeto:
-
-* R de cima (AOUT → pino ESP32): **100 kΩ**
-* R de baixo (pino ESP32 → GND): **68 kΩ**
-
-Isso derruba 5 V para algo em torno de ~3 V (dentro do limite do ADC do ESP32).
 
 ---
 
