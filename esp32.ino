@@ -1,203 +1,243 @@
+
+---
+
+# esp32.ino
+
+```cpp
+/***************************************************
+  Monitor de Energia IoT (ESP32)
+  ZMPT101B (V) + SCT-013-000 (A) + MQTT + Blynk + API HTTP
+  ---------------------------------------------------------
+  - Ajuste credenciais Wi-Fi, MQTT e Blynk
+  - Calibre CAL_ZMPT e CAL_SCT
+****************************************************/
+
+#if !defined(ESP32)
+# error "Use ESP32. Para ESP8266, adote ADC externo (ADS1115) ou migre para ESP32."
+#endif
+
 #include <WiFi.h>
+#include <WebServer.h>
 #include <PubSubClient.h>
-#include <DHT.h>
 
-// ========== CONFIG Wi-Fi ==========
-const char* WIFI_SSID = "Nome_wifi";
-const char* WIFI_PASS = "Senha_wifi";
+// ===== Blynk IoT =====
+#define BLYNK_TEMPLATE_ID   "SEU_TEMPLATE_ID"
+#define BLYNK_TEMPLATE_NAME "SEU_TEMPLATE_NAME"
+#define BLYNK_AUTH_TOKEN    "SEU_BLYNK_TOKEN"
+#include <BlynkSimpleEsp32.h>
 
-// ========== CONFIG MQTT ==========
-const char* MQTT_SERVER = "Ip_do_server";
-const int   MQTT_PORT   = 1883;
-const char* TOPIC_DHT   = "gas/dht";
-const char* TOPIC_MQ    = "gas/mq";
+// ===== Wi-Fi / MQTT =====
+const char* WIFI_SSID     = "SEU_WIFI";
+const char* WIFI_PASS     = "SUA_SENHA";
 
+const char* MQTT_BROKER   = "test.mosquitto.org";
+const uint16_t MQTT_PORT  = 1883;
+const char* MQTT_CLIENTID = "esp32_energy_monitor_01";
+
+// Tópicos
+const char* TOPIC_VRMS    = "iotbr/esp32/energy/vrms";
+const char* TOPIC_IRMS    = "iotbr/esp32/energy/irms";
+const char* TOPIC_PWR     = "iotbr/esp32/energy/power_apparent";
+const char* TOPIC_JSON    = "iotbr/esp32/energy/json";
+
+// ===== Pinos =====
+// ADC1 somente (evita conflito com Wi-Fi)
+const int PIN_ZMPT = 34;    // ZMPT101B
+const int PIN_SCT  = 35;    // SCT-013-000
+const int ADC_BITS = 12;
+const float VREF   = 3.3f;
+
+const int RELAY1_PIN = 25;
+const int RELAY2_PIN = 26;
+
+// ===== Blynk Vpins =====
+#define VPIN_VRMS   V0
+#define VPIN_IRMS   V1
+#define VPIN_PWR    V2
+#define VPIN_RLY1   V3
+#define VPIN_RLY2   V4
+
+// ===== Calibração =====
+float CAL_ZMPT = 385.0f;  // V por "V RMS no ADC"
+float CAL_SCT  = 60.0f;   // A por "V RMS no ADC"
+float offsetZ  = 2048.0f; // iniciam em mid-ADC; auto-ajuste no setup
+float offsetI  = 2048.0f;
+
+const uint16_t SAMPLE_MS = 1000; // janela ~1s
+const float ALPHA = 0.995f;      // filtro IIR p/ offset
+
+// ===== Conectividade =====
 WiFiClient espClient;
-PubSubClient client(espClient);
+PubSubClient mqtt(espClient);
+WebServer server(80);
 
-// ========== PINOS ==========
-#define PIN_MQ   34    // AOUT do MQ-5 (via divisor de tensão)
-#define PIN_DHT  4     // DATA do DHT11
+// ===== Estados (expostos na API) =====
+volatile float g_vrms = 0.0f, g_irms = 0.0f, g_S_va = 0.0f;
+volatile bool g_r1 = false, g_r2 = false;
 
-// ========== DHT11 ==========
-#define DHTTYPE DHT11
-DHT dht(PIN_DHT, DHTTYPE);
+// ===== Util =====
+static inline int readADC_Raw(int pin) { return analogRead(pin); }
 
-// ========== ADC / MQ-5 ==========
-const float ADC_VREF = 3.3;   // ESP32 ~3.3 V de referencia
-
-// Mapeamento linear ADC -> ppm (regra de 3)
-//  - ADC_MIN  (250)  ->  200 ppm
-//  - ADC_MAX  (4095) ->  10000 ppm
-//  - abaixo de 250   ->  0 ppm (desprezível)
-const int   ADC_MIN  = 250;       // ponto de 200 ppm
-const int   ADC_MAX  = 4095;      // ponto de 10000 ppm
-const float PPM_MIN  = 200.0;
-const float PPM_MAX  = 10000.0;
-
-// Converte ADC bruto para ppm pela regra de 3
-float adcToPPM(int adc) {
-  // abaixo do limiar, consideramos 0 ppm
-  if (adc < ADC_MIN) {
-    return 0.0;
-  }
-
-  // satura em ADC_MAX pra não extrapolar demais
-  if (adc > ADC_MAX) {
-    adc = ADC_MAX;
-  }
-
-  float frac = (float)(adc - ADC_MIN) / (float)(ADC_MAX - ADC_MIN);
-  float ppm  = PPM_MIN + frac * (PPM_MAX - PPM_MIN);
-  return ppm;
+void setRelay(uint8_t idx, bool on) {
+  int pin = (idx == 1) ? RELAY1_PIN : RELAY2_PIN;
+  digitalWrite(pin, on ? HIGH : LOW);   // ajuste se seu relé for active-LOW
+  if (idx == 1) g_r1 = on; else g_r2 = on;
 }
 
-// ========== Wi-Fi / MQTT ==========
 void connectWiFi() {
-  Serial.print("Conectando ao Wi-Fi ");
-  Serial.println(WIFI_SSID);
-
+  if (WiFi.status() == WL_CONNECTED) return;
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-  Serial.print("Wi-Fi OK, IP = ");
-  Serial.println(WiFi.localIP());
-}
-
-void mqttCallback(char*, byte*, unsigned int) {
-  // sem subscribe
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && (millis() - t0) < 20000) delay(300);
 }
 
 void connectMQTT() {
-  client.setServer(MQTT_SERVER, MQTT_PORT);
-  client.setCallback(mqttCallback);
-
-  while (!client.connected()) {
-    Serial.print("Conectando ao MQTT... ");
-    if (client.connect("ESP32_GAS_NODE")) {
-      Serial.println("OK");
-    } else {
-      Serial.print("falha (rc=");
-      Serial.print(client.state());
-      Serial.println(") - tentando em 5 s");
-      delay(5000);
-    }
+  mqtt.setServer(MQTT_BROKER, MQTT_PORT);
+  uint8_t retry = 0;
+  while (!mqtt.connected() && retry < 10) {
+    if (mqtt.connect(MQTT_CLIENTID)) break;
+    delay(500);
+    retry++;
   }
 }
 
-// ========== TEMPORIZAÇÃO ==========
-unsigned long lastPublish = 0;
-const unsigned long PUBLISH_INTERVAL = 5000;
+// ===== Medição =====
+void computeRMS(float &vrms, float &irms) {
+  uint32_t t_start = millis();
+  double accV2 = 0.0, accI2 = 0.0;
+  uint32_t n = 0;
 
-// ========== SETUP ==========
+  while (millis() - t_start < SAMPLE_MS) {
+    int rv = readADC_Raw(PIN_ZMPT);
+    int ri = readADC_Raw(PIN_SCT);
+
+    offsetZ = ALPHA * offsetZ + (1.0f - ALPHA) * rv;
+    offsetI = ALPHA * offsetI + (1.0f - ALPHA) * ri;
+
+    float vz = (float)rv - offsetZ;
+    float iz = (float)ri - offsetI;
+
+    float v_adc = vz * (VREF / ((1 << ADC_BITS) - 1));
+    float i_adc = iz * (VREF / ((1 << ADC_BITS) - 1));
+
+    accV2 += (double)v_adc * (double)v_adc;
+    accI2 += (double)i_adc * (double)i_adc;
+    n++;
+    delayMicroseconds(200);
+  }
+
+  if (n == 0) { vrms = irms = 0; return; }
+  float v_adc_rms = sqrt(accV2 / (double)n);
+  float i_adc_rms = sqrt(accI2 / (double)n);
+
+  vrms = v_adc_rms * CAL_ZMPT;
+  irms = i_adc_rms * CAL_SCT;
+}
+
+// ===== Blynk Handlers =====
+BLYNK_WRITE(VPIN_RLY1) { setRelay(1, param.asInt() == 1); }
+BLYNK_WRITE(VPIN_RLY2) { setRelay(2, param.asInt() == 1); }
+
+// ===== HTTP API =====
+void handleMetrics() {
+  char j[200];
+  snprintf(j, sizeof(j),
+    "{\"vrms\":%.2f,\"irms\":%.3f,\"S_va\":%.1f,\"r1\":%d,\"r2\":%d}",
+    g_vrms, g_irms, g_S_va, g_r1 ? 1 : 0, g_r2 ? 1 : 0);
+  server.send(200, "application/json", j);
+}
+
+void handleRelay() {
+  if (!server.hasArg("ch") || !server.hasArg("on")) {
+    server.send(400, "application/json", "{\"error\":\"args: ch,on\"}");
+    return;
+  }
+  int ch = server.arg("ch").toInt();
+  int on = server.arg("on").toInt();
+  if (ch < 1 || ch > 2 || (on != 0 && on != 1)) {
+    server.send(400, "application/json", "{\"error\":\"invalid ch/on\"}");
+    return;
+  }
+  setRelay((uint8_t)ch, on == 1);
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleRoot() {
+  server.send(200, "text/plain",
+    "OK. Use /api/metrics (JSON) e /api/relay?ch=1&on=1. Abra o index.html no PC e aponte para o IP deste ESP.");
+}
+
+// ===== Setup =====
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(200);
 
-  Serial.println();
-  Serial.println("ESP32 WROVER - MQ-5 (analogico bruto) + DHT11 + MQTT");
-  Serial.print("Mapeamento linear: ADC ");
-  Serial.print(ADC_MIN);
-  Serial.print(" -> ");
-  Serial.print(PPM_MIN);
-  Serial.print(" ppm | ADC ");
-  Serial.print(ADC_MAX);
-  Serial.print(" -> ");
-  Serial.print(PPM_MAX);
-  Serial.println(" ppm (abaixo de 250 = 0 ppm)");
+  analogReadResolution(ADC_BITS);
 
-  pinMode(PIN_MQ, INPUT);
-  analogReadResolution(12);   // 0..4095
-
-  dht.begin();
+  pinMode(RELAY1_PIN, OUTPUT);
+  pinMode(RELAY2_PIN, OUTPUT);
+  setRelay(1, false);
+  setRelay(2, false);
 
   connectWiFi();
+  Blynk.config(BLYNK_AUTH_TOKEN);
+  Blynk.connect(10000);
+
   connectMQTT();
+
+  // offsets iniciais
+  double avgZ = 0, avgI = 0;
+  const int warm = 2000;
+  for (int i = 0; i < warm; i++) { avgZ += readADC_Raw(PIN_ZMPT); avgI += readADC_Raw(PIN_SCT); delay(1); }
+  offsetZ = (float)(avgZ / warm);
+  offsetI = (float)(avgI / warm);
+
+  // HTTP
+  server.on("/", handleRoot);
+  server.on("/api/metrics", HTTP_GET, handleMetrics);
+  server.on("/api/relay",   HTTP_GET, handleRelay);
+  server.begin();
+
+  Serial.print("IP: "); Serial.println(WiFi.localIP());
 }
 
-// ========== LOOP ==========
+// ===== Loop =====
 void loop() {
-  if (!client.connected()) {
-    connectMQTT();
-  }
-  client.loop();
+  if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  if (!mqtt.connected()) connectMQTT();
+  mqtt.loop();
+  Blynk.run();
+  server.handleClient();
 
-  // --- MQ-5: valor bruto do analogRead ---
-  const int samples = 10;
-  long adcSum = 0;
-  for (int i = 0; i < samples; i++) {
-    adcSum += analogRead(PIN_MQ);
-    delay(5);
-  }
-  int raw_adc = (int)(adcSum / samples);         // valor bruto
-  float v_adc = raw_adc * (ADC_VREF / 4095.0);   // tensão aproximada no pino
-  float ppm   = adcToPPM(raw_adc);               // ppm pela regra de 3
+  float vrms = 0.0f, irms = 0.0f;
+  computeRMS(vrms, irms);
+  float S_va = vrms * irms;
 
-  // --- DHT11 ---
-  float hum  = dht.readHumidity();
-  float temp = dht.readTemperature();
+  g_vrms = vrms; g_irms = irms; g_S_va = S_va;
 
-  // --- SERIAL BONITINHO ---
-  Serial.print("[MQ-5] raw_adc=");
-  Serial.print(raw_adc);
-  Serial.print(" | v_adc=");
-  Serial.print(v_adc, 3);
-  Serial.print(" V | ppm≈");
-  Serial.print(ppm, 1);
+  // Serial
+  Serial.printf("Vrms=%.1f V | Irms=%.2f A | S=%.1f VA\n", vrms, irms, S_va);
 
-  Serial.print("   ||   [DHT11] ");
-  if (isnan(temp) || isnan(hum)) {
-    Serial.print("temp=ERR, hum=ERR");
-  } else {
-    Serial.print("temp=");
-    Serial.print(temp, 1);
-    Serial.print(" °C, hum=");
-    Serial.print(hum, 1);
-    Serial.print(" %");
-  }
-  Serial.println();
+  // MQTT
+  char buf[64];
+  dtostrf(vrms, 0, 2, buf); mqtt.publish(TOPIC_VRMS, buf, true);
+  dtostrf(irms, 0, 3, buf); mqtt.publish(TOPIC_IRMS, buf, true);
+  dtostrf(S_va, 0, 1, buf); mqtt.publish(TOPIC_PWR,  buf, true);
 
-  // --- MQTT (a cada 5 s) ---
-  unsigned long now = millis();
-  if (now - lastPublish > PUBLISH_INTERVAL) {
-    lastPublish = now;
+  char j[160];
+  snprintf(j, sizeof(j), "{\"vrms\":%.2f,\"irms\":%.3f,\"S_va\":%.1f}", vrms, irms, S_va);
+  mqtt.publish(TOPIC_JSON, j, true);
 
-    // DHT
-    if (!isnan(temp) && !isnan(hum)) {
-      char payloadDHT[64];
-      snprintf(payloadDHT, sizeof(payloadDHT),
-               "{\"temp\":%.1f,\"hum\":%.1f}",
-               temp, hum);
-      client.publish(TOPIC_DHT, payloadDHT);
-      Serial.print("Publicado DHT -> ");
-      Serial.println(payloadDHT);
-    } else {
-      Serial.println("Falha ao ler DHT11 (nao publicado)");
-    }
+  // Blynk
+  Blynk.virtualWrite(VPIN_VRMS, vrms);
+  Blynk.virtualWrite(VPIN_IRMS, irms);
+  Blynk.virtualWrite(VPIN_PWR,  S_va);
 
-    // MQ-5
-    char payloadMQ[160];
-    snprintf(payloadMQ, sizeof(payloadMQ),
-             "{\"raw_adc\":%d,"
-             "\"v_adc\":%.3f,"
-             "\"ppm\":%.1f,"
-             "\"temp\":%.1f,"
-             "\"hum\":%.1f}",
-             raw_adc,
-             v_adc,
-             ppm,
-             isnan(temp) ? 0.0 : temp,
-             isnan(hum)  ? 0.0 : hum);
-
-    client.publish(TOPIC_MQ, payloadMQ);
-    Serial.print("Publicado MQ -> ");
-    Serial.println(payloadMQ);
-  }
-
-  delay(200);
+  delay(1000);
 }
+
+/* ===== Notas =====
+- Se seu módulo de relé for ativo-LOW, troque a lógica em setRelay().
+- Para potência real (W) e PF, amostre v(t)*i(t) e integre num ciclo; se quiser te mando a versão.
+*/
