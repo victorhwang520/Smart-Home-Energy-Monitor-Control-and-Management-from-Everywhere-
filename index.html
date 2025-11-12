@@ -1,389 +1,117 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="pt-br">
 <head>
-  <meta charset="UTF-8" />
-  <title>Natural Gas Monitor</title>
-  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <meta charset="utf-8" />
+  <title>Monitor de Energia — ESP32</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #0b1020;
-      color: #f5f5f5;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
-      align-items: center;
-    }
-    header {
-      width: 100%;
-      padding: 16px 24px;
-      box-sizing: border-box;
-      background: #101735;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-    }
-    header h1 {
-      margin: 0;
-      font-size: 1.3rem;
-    }
-    #conn-status {
-      font-size: 0.9rem;
-      padding: 4px 10px;
-      border-radius: 999px;
-      background: #444;
-    }
-    #conn-status.ok {
-      background: #1f9d55;
-    }
-    #conn-status.err {
-      background: #e3342f;
-    }
-    main {
-      padding: 24px;
-      max-width: 900px;
-      width: 100%;
-      box-sizing: border-box;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .card {
-      background: #161e3f;
-      border-radius: 18px;
-      padding: 16px 18px;
-      box-shadow: 0 6px 14px rgba(0,0,0,0.25);
-      position: relative;
-      overflow: hidden;
-    }
-    .card h2 {
-      margin: 0 0 6px;
-      font-size: 1rem;
-      opacity: 0.9;
-    }
-    .value {
-      font-size: 2rem;
-      font-weight: 600;
-    }
-    .unit {
-      font-size: 0.9rem;
-      opacity: 0.8;
-      margin-left: 4px;
-    }
-    .label-muted {
-      font-size: 0.75rem;
-      opacity: 0.7;
-    }
-    .badge {
-      font-size: 0.7rem;
-      padding: 3px 8px;
-      border-radius: 999px;
-      background: #24345c;
-      position: absolute;
-      top: 12px;
-      right: 12px;
-    }
-    .card.ok {
-      border: 1px solid rgba(46, 204, 113, 0.5);
-    }
-    .card.warn {
-      border: 1px solid rgba(241, 196, 15, 0.7);
-    }
-    .card.alarm {
-      border: 1px solid rgba(231, 76, 60, 0.9);
-      box-shadow: 0 0 20px rgba(231, 76, 60, 0.8);
-    }
-    #alarms {
-      background: #241324;
-      border-radius: 18px;
-      padding: 14px 16px;
-      border: 1px solid rgba(231, 76, 60, 0.7);
-    }
-    #alarms h2 {
-      margin: 0 0 8px;
-      font-size: 1rem;
-    }
-    #alarm-list {
-      margin: 0;
-      padding-left: 18px;
-      font-size: 0.9rem;
-    }
-    #alarm-list li {
-      margin-bottom: 4px;
-    }
-    #alarm-list .none {
-      list-style: none;
-      padding-left: 0;
-      opacity: 0.7;
-    }
-    #log {
-      margin-top: 18px;
-      font-size: 0.75rem;
-      max-height: 200px;
-      overflow-y: auto;
-      background: #0d1224;
-      border-radius: 10px;
-      padding: 10px;
-      border: 1px solid #222a4d;
-    }
-    #log div {
-      margin-bottom: 3px;
-      opacity: 0.75;
-    }
-    code {
-      font-family: "Fira Code", Consolas, monospace;
-      font-size: 0.75rem;
-    }
+    :root { font-family: system-ui, Arial, sans-serif; }
+    body { margin: 24px; max-width: 900px; }
+    h1 { margin: 0 0 8px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { flex: 1 1 260px; border: 1px solid #4443; border-radius: 12px; padding: 16px; box-shadow: 0 1px 8px #0001; }
+    .kpi { font-size: 36px; margin: 6px 0; }
+    .muted { color: #666; font-size: 14px; }
+    .ctrl { display: flex; gap: 12px; }
+    input[type=text]{ padding:8px 10px; border-radius:8px; border:1px solid #4443; width: 280px;}
+    button{ padding:10px 14px; border-radius:10px; border:1px solid #4443; cursor:pointer;}
+    .ok{ background:#e8ffe8; }
+    .err{ background:#ffe8e8; }
+    .badge{ display:inline-block; padding:3px 8px; border-radius:999px; border:1px solid #4443; font-size:12px;}
+    .on{ background:#d9f7ff; }
   </style>
 </head>
 <body>
-  <header>
-    <h1>Natural Gas &amp; Environment Monitor</h1>
-    <div id="conn-status" class="err">Disconnected</div>
-  </header>
+  <h1>Monitor de Energia — ESP32</h1>
+  <p class="muted">
+    Informe o IP do ESP32 para consumir a API <code>/api/metrics</code> e <code>/api/relay</code>.
+  </p>
 
-  <main>
-    <section class="grid">
-      <div class="card ok" id="card-temp">
-        <span class="badge">Temperature</span>
-        <h2>Temperature</h2>
-        <div>
-          <span class="value" id="temp-value">--</span>
-          <span class="unit">°C</span>
-        </div>
-        <div class="label-muted" id="temp-updated">Last update: --</div>
-      </div>
+  <div class="row" style="align-items:center; margin-bottom:16px;">
+    <input id="base" type="text" placeholder="http://192.168.0.123" />
+    <button id="save">Conectar</button>
+    <span id="status" class="badge">desconectado</span>
+  </div>
 
-      <div class="card ok" id="card-hum">
-        <span class="badge">Humidity</span>
-        <h2>Humidity</h2>
-        <div>
-          <span class="value" id="hum-value">--</span>
-          <span class="unit">%</span>
-        </div>
-        <div class="label-muted" id="hum-updated">Last update: --</div>
-      </div>
+  <div class="row">
+    <div class="card">
+      <div class="muted">Tensão (Vrms)</div>
+      <div id="vrms" class="kpi">--.- V</div>
+    </div>
+    <div class="card">
+      <div class="muted">Corrente (Irms)</div>
+      <div id="irms" class="kpi">--.-- A</div>
+    </div>
+    <div class="card">
+      <div class="muted">Potência Aparente (S)</div>
+      <div id="sva" class="kpi">---.- VA</div>
+    </div>
+  </div>
 
-      <div class="card ok" id="card-gas">
-        <span class="badge">Gas (MQ-5)</span>
-        <h2>Gas concentration</h2>
-        <div>
-          <span class="value" id="ppm-value">--</span>
-          <span class="unit">ppm (aprox.)</span>
-        </div>
-        <div class="label-muted" id="gas-updated">Last update: --</div>
-      </div>
-    </section>
-
-    <section id="alarms">
-      <h2>Alarms</h2>
-      <ul id="alarm-list">
-        <li class="none">No active alarms</li>
-      </ul>
-    </section>
-
-    <section id="log">
-      <!-- log de mensagens MQTT -->
-    </section>
-  </main>
+  <div class="card" style="margin-top:16px;">
+    <h3 style="margin:0 0 10px;">Relés</h3>
+    <div class="ctrl">
+      <button id="r1on">Relé 1 ON</button>
+      <button id="r1off">Relé 1 OFF</button>
+      <span id="r1st" class="badge">R1: --</span>
+    </div>
+    <div class="ctrl" style="margin-top:10px;">
+      <button id="r2on">Relé 2 ON</button>
+      <button id="r2off">Relé 2 OFF</button>
+      <span id="r2st" class="badge">R2: --</span>
+    </div>
+  </div>
 
   <script>
-    // === CONFIG MQTT (AJUSTAR AQUI) ==========================================
-    const MQTT_URL   = "ws://192.168.15.151:8080"; // URL WebSocket do Mosquitto
-    const MQTT_TOPIC_DHT = "gas/dht";
-    const MQTT_TOPIC_MQ  = "gas/mq";
+    const $ = (id) => document.getElementById(id);
+    let base = localStorage.getItem("esp_base") || "";
+    $("base").value = base;
 
-    // Limiar de alarme (ajuste pra sua realidade)
-    const TEMP_ALARM_C = 60;  // °C
-    const GAS_ALARM_PPM = 10; // ppm aprox.
+    function mark(ok) {
+      const s = $("status");
+      s.textContent = ok ? "ok" : "erro";
+      s.className = "badge " + (ok ? "ok" : "err");
+    }
 
-    // === ESTADO ATUAL ========================================================
-    let lastTemp = null;
-    let lastHum  = null;
-    let lastPPM  = null;
-
-    // === ELEMENTOS DOM =======================================================
-    const statusEl    = document.getElementById("conn-status");
-    const tempValueEl = document.getElementById("temp-value");
-    const humValueEl  = document.getElementById("hum-value");
-    const ppmValueEl  = document.getElementById("ppm-value");
-    const tempUpdEl   = document.getElementById("temp-updated");
-    const humUpdEl    = document.getElementById("hum-updated");
-    const gasUpdEl    = document.getElementById("gas-updated");
-    const alarmListEl = document.getElementById("alarm-list");
-    const cardTemp    = document.getElementById("card-temp");
-    const cardHum     = document.getElementById("card-hum");
-    const cardGas     = document.getElementById("card-gas");
-    const logEl       = document.getElementById("log");
-
- function formatTime() {
-    const d = new Date();
-    return d.toLocaleTimeString();
-  }
-
-  // agora o logMessage só recebe uma string já formatada
-  function logMessage(text) {
-    const div = document.createElement("div");
-    div.textContent = "[" + formatTime() + "] " + text;
-    logEl.prepend(div);
-  }
-
-    function setStatus(ok) {
-      if (ok) {
-        statusEl.textContent = "Connected";
-        statusEl.classList.remove("err");
-        statusEl.classList.add("ok");
-      } else {
-        statusEl.textContent = "Disconnected";
-        statusEl.classList.remove("ok");
-        statusEl.classList.add("err");
+    async function fetchMetrics() {
+      if (!base) return;
+      try {
+        const r = await fetch(base + "/api/metrics", { cache: "no-store" });
+        if (!r.ok) throw 0;
+        const j = await r.json();
+        $("vrms").textContent = (j.vrms ?? 0).toFixed(1) + " V";
+        $("irms").textContent = (j.irms ?? 0).toFixed(3) + " A";
+        $("sva").textContent  = (j.S_va ?? 0).toFixed(1) + " VA";
+        $("r1st").textContent = "R1: " + (j.r1 ? "ON" : "OFF");
+        $("r2st").textContent = "R2: " + (j.r2 ? "ON" : "OFF");
+        $("r1st").className = "badge " + (j.r1 ? "on" : "");
+        $("r2st").className = "badge " + (j.r2 ? "on" : "");
+        mark(true);
+      } catch (e) {
+        mark(false);
       }
     }
 
-    function updateCards() {
-      // temperature
-      if (lastTemp !== null) {
-        tempValueEl.textContent = lastTemp.toFixed(1);
-        tempUpdEl.textContent = "Last update: " + formatTime();
-      }
-      // humidity
-      if (lastHum !== null) {
-        humValueEl.textContent = lastHum.toFixed(1);
-        humUpdEl.textContent = "Last update: " + formatTime();
-      }
-      // gas
-      if (lastPPM !== null) {
-        ppmValueEl.textContent = lastPPM.toFixed(1);
-        gasUpdEl.textContent = "Last update: " + formatTime();
-      }
+    async function callRelay(ch, on) {
+      if (!base) return;
+      try {
+        const r = await fetch(`${base}/api/relay?ch=${ch}&on=${on}`);
+        await fetchMetrics();
+      } catch (e) { mark(false); }
     }
 
-    function updateAlarms() {
-      const alarms = [];
+    $("save").onclick = () => {
+      base = $("base").value.trim().replace(/\/+$/,"");
+      localStorage.setItem("esp_base", base);
+      fetchMetrics();
+    };
+    $("r1on").onclick  = () => callRelay(1, 1);
+    $("r1off").onclick = () => callRelay(1, 0);
+    $("r2on").onclick  = () => callRelay(2, 1);
+    $("r2off").onclick = () => callRelay(2, 0);
 
-      // reset classes
-      [cardTemp, cardHum, cardGas].forEach(c => {
-        c.classList.remove("ok", "warn", "alarm");
-        c.classList.add("ok");
-      });
-
-      // temperatura
-      if (lastTemp !== null && lastTemp >= TEMP_ALARM_C) {
-        alarms.push("High temperature (" + lastTemp.toFixed(1) + " °C)");
-        cardTemp.classList.remove("ok");
-        cardTemp.classList.add("alarm");
-      }
-
-      // gás
-      if (lastPPM !== null && lastPPM >= GAS_ALARM_PPM) {
-        alarms.push("Possible gas leak (" + lastPPM.toFixed(1) + " ppm)");
-        cardGas.classList.remove("ok");
-        cardGas.classList.add("alarm");
-      } else if (lastPPM !== null && lastPPM >= GAS_ALARM_PPM * 0.5) {
-        // zona de atenção
-        cardGas.classList.remove("ok");
-        cardGas.classList.add("warn");
-      }
-
-      // atualiza lista de alarmes
-      alarmListEl.innerHTML = "";
-      if (alarms.length === 0) {
-        const li = document.createElement("li");
-        li.textContent = "No active alarms";
-        li.classList.add("none");
-        alarmListEl.appendChild(li);
-      } else {
-        alarms.forEach(a => {
-          const li = document.createElement("li");
-          li.textContent = a;
-          alarmListEl.appendChild(li);
-        });
-      }
-    }
-
-    // === CONEXÃO MQTT via mqtt.js ============================================
-    const clientId = "web-dashboard-" + Math.random().toString(16).substr(2, 8);
-    const client = mqtt.connect(MQTT_URL, {
-      clientId,
-      keepalive: 30,
-    });
-
-    client.on("connect", () => {
-      setStatus(true);
-      logMessage("Connected to MQTT as " + clientId);
-      client.subscribe(MQTT_TOPIC_DHT, err => {
-        if (!err) logMessage("Subscribed to " + MQTT_TOPIC_DHT);
-      });
-      client.subscribe(MQTT_TOPIC_MQ, err => {
-        if (!err) logMessage("Subscribed to " + MQTT_TOPIC_MQ);
-      });
-    });
-
-    client.on("reconnect", () => {
-      setStatus(false);
-      logMessage("Reconnecting...");
-    });
-
-    client.on("close", () => {
-      setStatus(false);
-      logMessage("Connection closed");
-    });
-
-    client.on("error", (err) => {
-      setStatus(false);
-      console.error(err);
-      logMessage("MQTT error: " + err.message);
-    });
-
-  client.on("message", (topic, payload) => {
-  try {
-    const msgStr = payload.toString();
-    const data = JSON.parse(msgStr);
-
-    // Atualiza estado interno
-    if (topic === MQTT_TOPIC_DHT) {
-      // só atualiza, não loga
-      if (typeof data.temp === "number") lastTemp = data.temp;
-      if (typeof data.hum === "number")  lastHum  = data.hum;
-      updateCards();
-      updateAlarms();
-      return; // sai daqui, nada de log
-    }
-
-    if (topic === MQTT_TOPIC_MQ) {
-      if (typeof data.ppm === "number")  lastPPM = data.ppm;
-      // se o JSON de gas/mq também tiver temp/hum, podemos atualizar:
-      if (typeof data.temp === "number") lastTemp = data.temp;
-      if (typeof data.hum  === "number") lastHum  = data.hum;
-
-      updateCards();
-      updateAlarms();
-
-      // Monta uma linha legível SÓ quando vem gas/mq
-      let parts = [];
-      if (lastTemp !== null) parts.push("temperature: " + lastTemp.toFixed(1) + " °C");
-      if (lastHum  !== null) parts.push("humidity: "    + lastHum.toFixed(1)  + " %");
-      if (lastPPM  !== null) parts.push("ppm: "         + lastPPM.toFixed(1));
-
-      if (parts.length > 0) {
-        logMessage(parts.join(" | "));
-      } else {
-        logMessage(topic + " " + msgStr); // fallback
-      }
-    }
-
-  } catch (e) {
-    console.error("Error parsing message", e);
-    logMessage("error parsing " + topic + ": " + e.message);
-  }
-});
-
-</script>
+    setInterval(fetchMetrics, 1000);
+    if (base) fetchMetrics();
+  </script>
 </body>
 </html>
